@@ -5,10 +5,12 @@ import pandas as pd
 
 
 class Posepoints():
-    def __init__(self, face_mesh_object, hands_object, df=None):
+    def __init__(self, face_mesh_object, hands_object, df=None, frame_width=640, frame_height=480):
         self.face_mesh_object = face_mesh_object
         self.hands_object = hands_object
         self.df = df if df is not None else pd.DataFrame()
+        self.frame_width = frame_width
+        self.frame_height = frame_height
     
     def process_frame(self, frame, frame_id):
         face_results = self.face_mesh_object.process(frame)
@@ -18,7 +20,7 @@ class Posepoints():
         return face_results, hand_results
     
     @staticmethod
-    def get_eye_landmarks(face_results):
+    def get_eye_landmarks(face_results, frame_width=640, frame_height=480):
         left_eye_landmarks = []
         right_eye_landmarks = []
         left_pupil_landmarks = []
@@ -58,10 +60,10 @@ class Posepoints():
                     face_landmarks.landmark[477], # bottom point
                 ]
                 # Convert landmarks to list
-                left_eye_landmarks = [(landmark.x, landmark.y, landmark.z) for landmark in left_eye_landmarks]
-                right_eye_landmarks = [(landmark.x, landmark.y, landmark.z) for landmark in right_eye_landmarks]
-                left_pupil_landmarks = [(landmark.x, landmark.y, landmark.z) for landmark in left_pupil_landmarks]
-                right_pupil_landmarks = [(landmark.x, landmark.y, landmark.z) for landmark in right_pupil_landmarks]
+                left_eye_landmarks = [(landmark.x * frame_width, landmark.y * frame_height, landmark.z) for landmark in left_eye_landmarks]
+                right_eye_landmarks = [(landmark.x * frame_width, landmark.y * frame_height, landmark.z) for landmark in right_eye_landmarks]
+                left_pupil_landmarks = [(landmark.x * frame_width, landmark.y * frame_height, landmark.z) for landmark in left_pupil_landmarks]
+                right_pupil_landmarks = [(landmark.x * frame_width, landmark.y * frame_height, landmark.z) for landmark in right_pupil_landmarks]
 
         return left_eye_landmarks, right_eye_landmarks, left_pupil_landmarks, right_pupil_landmarks
     
@@ -74,7 +76,7 @@ class Posepoints():
             "frame_id": self.frame_id,
         }
 
-        feature_points["left_eye"], feature_points["right_eye"], feature_points["left_pupil"], feature_points["right_pupil"] = self.get_eye_landmarks(face_results)
+        feature_points["left_eye"], feature_points["right_eye"], feature_points["left_pupil"], feature_points["right_pupil"] = self.get_eye_landmarks(face_results, self.frame_width, self.frame_height)
     
         return feature_points
     
@@ -92,6 +94,7 @@ class Posepoints():
     @staticmethod
     def euclidean_distance_2d(point1, point2):
         """Calculates the Euclidean distance between two 2D points."""
+        #print(point1, point2)
         x1, y1, z1 = point1
         x2, y2, z2 = point2
         return np.sqrt((x2 - x1)**2 + (y2 - y1)**2)
@@ -105,7 +108,10 @@ class Posepoints():
     
     @staticmethod
     def EyeAspectRatio2D(eye):
+        #print(eye)
         # Formula : dist(p2,p6) + dist(p3,p5) / 2*dist(p1, p4)
+        if eye is None or len(eye) < 6:
+            return 0
         p1 = (eye[0][0], eye[0][1], eye[0][2])
         p2 = (eye[2][0], eye[2][1], eye[2][2])
         p3 = (eye[3][0], eye[3][1], eye[3][2])
@@ -125,6 +131,8 @@ class Posepoints():
     @staticmethod
     def EyeAspectRatio3D(eye):
         # Formula : dist(p2,p6) + dist(p3,p5) / 2*dist(p1, p4)
+        if eye is None or len(eye) < 6:
+            return 0
         p1 = (eye[0][0], eye[0][1], eye[0][2])
         p2 = (eye[2][0], eye[2][1], eye[2][2])
         p3 = (eye[3][0], eye[3][1], eye[3][2])
@@ -144,8 +152,8 @@ class Posepoints():
     @staticmethod
     def center_pupil(pupil):
         """Calculates the center of the pupil given its landmarks."""
-        if not pupil:
-            return None
+        if not pupil or len(pupil) < 4:
+            return 0
         
         x_coords = [p[0] for p in pupil]
         y_coords = [p[1] for p in pupil]
@@ -158,8 +166,8 @@ class Posepoints():
     @staticmethod
     def center_eye(eye):
         """Calculates the center of the eye given its landmarks."""
-        if not eye:
-            return None
+        if not eye or len(eye) < 6:
+            return 0
         
         x_coords = [p[0] for p in eye]
         y_coords = [p[1] for p in eye]
@@ -172,19 +180,51 @@ class Posepoints():
     @staticmethod
     def eye_pupling_distance(eye, pupil):
         """Calculates the distance between the eye and pupil centers."""
-        if not eye or not pupil:
-            return None
+        if eye is None or pupil is None:
+            return 0
+        if len(eye) < 6 or len(pupil) < 4:
+            return 0
         
         eye_center = Posepoints.center_eye(eye)
         pupil_center = Posepoints.center_pupil(pupil)
+
+        # add a zero in the z axis
+        eye_center = (eye_center[0], eye_center[1], 0)
+        pupil_center = (pupil_center[0], pupil_center[1], 0)
         
         if eye_center is None or pupil_center is None:
             return None
         
         return Posepoints.euclidean_distance_2d(eye_center, pupil_center)
     
+    def count_blinks_in_window(self, num_frames=30):
+        if self.df.empty or len(self.df) < 3:  # Need at least 3 frames to detect a complete blink
+            return 0
+            
+        available_frames = min(len(self.df), num_frames)
+        window_data = self.df.tail(available_frames).copy()
+        
+        if len(window_data) < 3:
+            return 0
+        
+        window_data['both_eyes_closed'] = (window_data['left_eye_closed'] & 
+                                        window_data['right_eye_closed']).astype(int)
+        
+        window_data['state_change'] = window_data['both_eyes_closed'].diff().fillna(0)
+        
+       
+        blink_count = len(window_data[window_data['state_change'] == -1])
+        
+        return blink_count
+    
     def variance_pupil_movement(self, eye_pupil_distance, side="left", num_frames=10):
         """Calculates the variance of pupil movement over a specified number of frames."""
+        if self.df.empty:
+            return 0, 0
+        if side not in ["left", "right"]:
+            raise ValueError("Side must be either 'left' or 'right'")
+        if len(self.df) < num_frames:
+            return 0, 0
         last_rows = self.df.tail(num_frames)
         if side == "left":
             last_rows = last_rows[last_rows["left_eye_pupil_distance"].notna()]
@@ -224,6 +264,7 @@ class Posepoints():
         right_eye_pupil_movement, right_eye_pupil_variance = self.variance_pupil_movement(right_eye_pupil_distance, side="right")
         left_eye_closed = self.is_eye_closed(left_eye)
         right_eye_closed = self.is_eye_closed(right_eye)
+        num_blinks = self.count_blinks_in_window(num_frames=30)
 
         data = {
             "frame_id": frame_id,
@@ -240,6 +281,7 @@ class Posepoints():
             "right_eye_pupil_variance": right_eye_pupil_variance,
             "left_eye_closed": left_eye_closed,
             "right_eye_closed": right_eye_closed,
+            "num_blinks": num_blinks,
         }
 
         return data
@@ -272,9 +314,8 @@ if __name__ == "__main__":
     face_mesh = mp_face_mesh.FaceMesh(max_num_faces=1, refine_landmarks=True, 
                                   min_detection_confidence=0.5, min_tracking_confidence=0.5)
     hands = mp.solutions.hands.Hands()
-    posepoints = Posepoints(face_mesh, hands)
     
-    cap = cv2.VideoCapture("/home/harsh/Downloads/sem2/edgeai/edge ai project/video6.mp4")
+    cap = cv2.VideoCapture("/home/harsh/Downloads/sem2/edgeai/edge ai project/video5.mp4")
 
     frame_id = 0
     frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -284,14 +325,25 @@ if __name__ == "__main__":
     fourcc = cv2.VideoWriter_fourcc(*'XVID')
     out = cv2.VideoWriter('eye_function.avi', fourcc, fps_input, (frame_width, frame_height))
 
-    extractor = Posepoints(face_mesh, hands)
+    extractor = Posepoints(face_mesh, hands, frame_width=frame_width, frame_height=frame_height)
 
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret:
             break
+            
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        
         frame_id += 1
-        face_results, hand_results = extractor.process_frame(frame, frame_id)
+        face_results, hand_results = extractor.process_frame(frame_rgb, frame_id)
+        
+        out.write(frame)
+        
+        # Optional: Show the frame
+        # cv2.imshow('MediaPipe Face Mesh', frame)
+        # if cv2.waitKey(5) & 0xFF == 27:
+        #     break
+            
     extractor.save_to_csv("eye_data.csv")
     cap.release()
     out.release()
