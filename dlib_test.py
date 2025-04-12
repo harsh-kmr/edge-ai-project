@@ -173,7 +173,7 @@ def get_points(frame, frame_id, face_mesh_object, hands_object):
 
     return feature_points
 
-cap = cv2.VideoCapture("/home/harsh/Downloads/sem2/edgeai/edge ai project/trimmed_video.mp4")
+cap = cv2.VideoCapture("/home/harsh/Downloads/sem2/edgeai/edge ai project/video6.mp4")
 
 frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
 frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
@@ -181,7 +181,6 @@ fps_input = int(cap.get(cv2.CAP_PROP_FPS))
 
 fourcc = cv2.VideoWriter_fourcc(*'XVID')
 out = cv2.VideoWriter('output_face_hands_points_function.avi', fourcc, fps_input, (frame_width, frame_height))
-
 frame_id = 0
 while cap.isOpened():
     ret, frame = cap.read()
@@ -220,8 +219,6 @@ while cap.isOpened():
         for x, y, z in all_points["face_shape"]:
             x_pixel, y_pixel = int(x * frame_width), int(y * frame_height)
             cv2.circle(frame, (x_pixel, y_pixel), 3, (255, 255, 0), -1)
-        # Draw lines between face shape points
-
     
     # Optionally display head pose if available
     if all_points["head_pose"] is not None:
@@ -230,13 +227,7 @@ while cap.isOpened():
         cv2.putText(frame, head_pose_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2, cv2.LINE_AA)
 
     out.write(frame)
-    cv2.imshow('Face and Hand Landmarks', frame)
-
-    if cv2.waitKey(1) & 0xFF == ord('q'):
-        break
-
     frame_id += 1
 
 cap.release()
 out.release()
-cv2.destroyAllWindows()
