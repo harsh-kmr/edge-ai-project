@@ -13,7 +13,7 @@ class Posepoints():
         self.frame_height = frame_height
         self.max_side_glance = max_side_glance
         self.mar_threshold= mar_threshold
-        self.ear_window = 30 # 1 sec @ 30fps
+        self.ear_window_size = 30 # 1 sec @ 30fps
         self.perclos_window = 60
         self.perclos_threshold = perclos_threshold
         
@@ -134,7 +134,7 @@ class Posepoints():
     
     @staticmethod
     def MouthAspectRatio(mouth):
-        if len(mouth) <4:
+        if mouth is None or len(mouth) < 8:
             return 0.0
         p1 = mouth[0]
         p2 = mouth[1]
@@ -142,8 +142,9 @@ class Posepoints():
         p4 = mouth[3]
         p5 = mouth[4]
         p6 = mouth[5]
-        p7 = mouth[7]
-        p8 = mouth[8]
+        p7 = mouth[6]
+        p8 = mouth[7]
+        
 
         horizontal_dist = Posepoints.euclidean_distance_2d(p1, p6)
 
@@ -157,10 +158,10 @@ class Posepoints():
         """Calculate perclos
         Calculate EAR per frame. Given an EAR threshold for "eye closure" i.e. self.perclos_threshold. Maintain a rolling window of frames given in self .perclos_window. Calculate the percentage of frames within the window where EAR < threshold. 
         """
-        if len(self.df)<self.perclose_window:
+        if len(self.df)<self.perclos_window:
             return 0.0
         
-        window = self.df. tail(self.perclos_threshold)
+        window = self.df.tail(self.perclos_window)
         valid_frames = window[~window['no_visible_eyes']]
         if len(valid_frames) == 0:
             return 0.0
