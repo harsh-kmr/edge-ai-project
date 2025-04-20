@@ -2,15 +2,21 @@ import mediapipe as mp
 import cv2
 import numpy as np
 import pandas as pd
-
+from collections import deque
 
 class Posepoints():
-    def __init__(self, face_mesh_object, hands_object, df=None, frame_width=640, frame_height=480):
+    def __init__(self, face_mesh_object, hands_object, df=None, frame_width=640, frame_height=480, max_side_glance=60, mar_threshold = 0.5, perclos_threshold=0.18):
         self.face_mesh_object = face_mesh_object
         self.hands_object = hands_object
         self.df = df if df is not None else pd.DataFrame()
         self.frame_width = frame_width
         self.frame_height = frame_height
+        self.max_side_glance = max_side_glance
+        self.mar_threshold= mar_threshold
+        self.ear_window_size = 30 # 1 sec @ 30fps
+        self.perclos_window = 60
+        self.perclos_threshold = perclos_threshold
+        
     
     def process_frame(self, frame, frame_id):
         face_results = self.face_mesh_object.process(frame)
@@ -19,6 +25,24 @@ class Posepoints():
         self.save_to_df(face_results, hand_results)
         return face_results, hand_results
     
+    @staticmethod
+    def get_mouth_landmarks(face_results, frame_width=640, frame_height=480):
+        mouth_landmarks =[]
+        if face_results.multi_face_landmarks:
+            for face_landmakrs in face_results.multi_face_landmarks:
+                mouth_landmarks = [
+                    face_landmakrs.landmark[67], # Right Corner of LiP
+                    face_landmakrs.landmark[73], # Right top of LiP
+                    face_landmakrs.landmark[11], # Top of LIP
+                    face_landmakrs.landmark[303], # Left top of LiP
+                    face_landmakrs.landmark[61], # Left Corner  of Lip
+                    face_landmakrs.landmark[403], # Left Botttom of LiP
+                    face_landmakrs.landmark[16], # Botttom of LiP
+                    face_landmakrs.landmark[180], # Right Botttom of LiP
+                ]
+                mouth_landmarks = [(lm.x * frame_width, lm.y*frame_height, lm.z) for lm in mouth_landmarks]
+                return mouth_landmarks
+
     @staticmethod
     def get_eye_landmarks(face_results, frame_width=640, frame_height=480):
         left_eye_landmarks = []
@@ -73,11 +97,13 @@ class Posepoints():
             "right_eye": [],
             "left_pupil": [],
             "right_pupil": [],
+            "mouth" : [],
             "frame_id": self.frame_id,
         }
 
         feature_points["left_eye"], feature_points["right_eye"], feature_points["left_pupil"], feature_points["right_pupil"] = self.get_eye_landmarks(face_results, self.frame_width, self.frame_height)
-    
+        feature_points["mouth"] = self.get_mouth_landmarks(face_results, self.frame_width, self.frame_height)
+            
         return feature_points
     
     @staticmethod
@@ -105,6 +131,44 @@ class Posepoints():
         x1, y1, z1 = point1
         x2, y2, z2 = point2
         return np.sqrt((x2 - x1)**2 + (y2 - y1)**2 + (z2 - z1)**2)
+    
+    @staticmethod
+    def MouthAspectRatio(mouth):
+        if mouth is None or len(mouth) < 8:
+            return 0.0
+        p1 = mouth[0]
+        p2 = mouth[1]
+        p3 = mouth[2]
+        p4 = mouth[3]
+        p5 = mouth[4]
+        p6 = mouth[5]
+        p7 = mouth[6]
+        p8 = mouth[7]
+        
+
+        horizontal_dist = Posepoints.euclidean_distance_2d(p1, p6)
+
+        if horizontal_dist < 1e-5:
+            return 0.0
+        
+        mar = (Posepoints.euclidean_distance_2d(p2,p8) + Posepoints.euclidean_distance_2d(p3, p7) + Posepoints.euclidean_distance_2d(p4,p6))/(2*Posepoints.euclidean_distance_2d(p1,p5))
+        return mar
+    
+    def calculate_perclos(self):
+        """Calculate perclos
+        Calculate EAR per frame. Given an EAR threshold for "eye closure" i.e. self.perclos_threshold. Maintain a rolling window of frames given in self .perclos_window. Calculate the percentage of frames within the window where EAR < threshold. 
+        """
+        if len(self.df)<self.perclos_window:
+            return 0.0
+        
+        window = self.df.tail(self.perclos_window)
+        valid_frames = window[~window['no_visible_eyes']]
+        if len(valid_frames) == 0:
+            return 0.0
+        avg_ear = (valid_frames['left_eye_aspect_ratio'] + 
+          valid_frames['right_eye_aspect_ratio']) / 2
+        closed_frames = avg_ear < self.perclos_threshold
+        return closed_frames.mean()
     
     @staticmethod
     def EyeAspectRatio2D(eye):
@@ -238,7 +302,19 @@ class Posepoints():
         variance = np.var(pupil_distance)
         return mean_distance, variance
 
-    
+    def calculate_ear_variance(self):
+        """Calculate mean and variance of eye aspect ratio"""
+        if len(self.df) < self.ear_window_size:
+            return 0.0, 0.0
+        
+        # We get a more human meaningful measure-reduce noise
+        avg_ears = (
+            self.df['left_eye_aspect_ratio'].tail(self.ear_window_size) + 
+            self.df['right_eye_aspect_ratio'].tail(self.ear_window_size)
+        ) / 2
+        
+        return np.mean(avg_ears), np.var(avg_ears.values)
+
     @staticmethod
     def is_eye_closed(eye, threshold=0.2):
         """Checks if the eye is closed based on the aspect ratio."""
@@ -252,7 +328,9 @@ class Posepoints():
         right_eye = feature_points["right_eye"]
         left_pupil = feature_points["left_pupil"]
         right_pupil = feature_points["right_pupil"]
+        mouth = feature_points['mouth']
 
+        # Eye based metric
         no_visible_eyes = self.no_visible_eyes(face_results)
         left_eye_aspect_ratio = self.EyeAspectRatio2D(left_eye)
         right_eye_aspect_ratio = self.EyeAspectRatio2D(right_eye)
@@ -260,12 +338,22 @@ class Posepoints():
         right_eye_aspect_ratio_3d = self.EyeAspectRatio3D(right_eye)
         left_eye_pupil_distance = self.eye_pupling_distance(left_eye, left_pupil)
         right_eye_pupil_distance = self.eye_pupling_distance(right_eye, right_pupil)
+        
+
         left_eye_pupil_movement, left_eye_pupil_variance = self.variance_pupil_movement(left_eye_pupil_distance, side="left")
         right_eye_pupil_movement, right_eye_pupil_variance = self.variance_pupil_movement(right_eye_pupil_distance, side="right")
         left_eye_closed = self.is_eye_closed(left_eye)
         right_eye_closed = self.is_eye_closed(right_eye)
         num_blinks = self.count_blinks_in_window(num_frames=30)
+        ear_variance = self.calculate_ear_variance()
 
+        perclos = self.calculate_perclos()
+        # Mouth based metrics
+        mouth_aspect_ratio = self.MouthAspectRatio(mouth)
+        # Mouth and eye based metric
+        eye_closure_during_yawn = (mouth_aspect_ratio > self.mar_threshold) and (left_eye_closed and right_eye_closed)
+        
+        
         data = {
             "frame_id": frame_id,
             "left_eye_aspect_ratio": left_eye_aspect_ratio,
@@ -282,6 +370,10 @@ class Posepoints():
             "left_eye_closed": left_eye_closed,
             "right_eye_closed": right_eye_closed,
             "num_blinks": num_blinks,
+            "mouth_aspect_ratio": mouth_aspect_ratio,
+            "eye_closure_during_yawn": eye_closure_during_yawn,
+            'ear_variance': ear_variance,
+            "perclos": perclos,
         }
 
         return data
@@ -351,7 +443,6 @@ if __name__ == "__main__":
     print("Processing complete.")
 
         
-
 
 
 
