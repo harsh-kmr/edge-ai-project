@@ -3,4 +3,5 @@
 *.avi
 *.mkv
 *.mov
-edgeai/edge ai project/dummy data/
+dummy data/
+__pycache__/
