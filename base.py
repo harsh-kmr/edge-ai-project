@@ -81,32 +81,79 @@ class MasterFeatureExtractor():
             **hand_data,
             **phone_data
         }
-        # Append the combined data to the DataFrame
-        if self.df is not None:
-            self.df = pd.concat([self.df, pd.DataFrame([combined_data])], ignore_index=True)
-        else:
-            self.df = pd.DataFrame([combined_data])
-        return combined_data
+        left_eye_landmarks, right_eye_landmarks, left_pupil_landmarks, right_pupil_landmarks = self.eye_features.get_eye_landmarks(face_results,  self.width, self.height)
+        mouth_landmarks = self.eye_features.get_mouth_landmarks(face_results,  self.width, self.height)
+        hand_landmarks = self.hand_features.extract_hand_position(pose_results)
+        return combined_data, left_eye_landmarks, right_eye_landmarks, left_pupil_landmarks, right_pupil_landmarks, mouth_landmarks, hand_landmarks
+
     
-    @staticmethod
-    def save_to_csv( filename, data):
-        # Check if file exists
-        file_exists = os.path.isfile(filename)
+def get_feature_for_model(self, frame, frame_id):
+        combined_data, left_eye_landmarks, right_eye_landmarks, left_pupil_landmarks, right_pupil_landmarks, mouth_landmarks, hand_landmarks = self.process_frame(frame, frame_id)
+        # Ordered list of keys
+        expected_keys = [
+            "left_eye_aspect_ratio",
+            "right_eye_aspect_ratio",
+            "left_eye_aspect_ratio_3d",
+            "right_eye_aspect_ratio_3d",
+            "left_eye_pupil_distance",
+            "right_eye_pupil_distance",
+            "no_visible_eyes",
+            "left_eye_closed",
+            "right_eye_closed",
+            "mouth_aspect_ratio",
+            "eye_closure_during_yawn",
+            "left_eye_pupil_movement",
+            "left_eye_pupil_variance",
+            "right_eye_pupil_movement",
+            "right_eye_pupil_variance",
+            "num_blinks",
+            "ear_mean",
+            "ear_variance",
+            "perclos",
+            "yaw",
+            "pitch",
+            "roll",
+            "yaw_variance",
+            "pitch_variance",
+            "roll_variance",
+            "head_away_duration",
+            "head_away_event_count",
+            "distraction_confidence",
+            "yaw_deviation",
+            "pitch_deviation",
+            "roll_deviation",
+            "left_wrist_x",
+            "left_wrist_y",
+            "left_wrist_z",
+            "left_palm_x",
+            "left_palm_y",
+            "left_palm_z",
+            "right_wrist_x",
+            "right_wrist_y",
+            "right_wrist_z",
+            "right_palm_x",
+            "right_palm_y",
+            "right_palm_z",
+            "left_hand_eye_depth",
+            "right_hand_eye_depth",
+            "left_elbow_angle",
+            "right_elbow_angle",
+            "left_hand_off_wheel",
+            "left_hand_off_wheel_duration",
+            "right_hand_off_wheel",
+            "right_hand_off_wheel_duration",
+            "left_hand_distance",
+            "right_hand_distance",
+            "left_hand_distance_var",
+            "right_hand_distance_var"
+        ]
+        feature_list = [0 if combined_data.get(key, None) is None else combined_data.get(key, None) for key in expected_keys]
+
         
-        # Open file in append mode if it exists, or create it if it doesn't
-        with open(filename, mode='a' if file_exists else 'w', newline='') as file:
-            # Get fieldnames from data dictionary
-            fieldnames = list(data.keys())
-            
-            # Create CSV writer
-            writer = csv.DictWriter(file, fieldnames=fieldnames)
-            
-            # Write header only if the file is being created
-            if not file_exists:
-                writer.writeheader()
-            
-            # Write the data row
-            writer.writerow(data)
+        
+        return feature_list, left_eye_landmarks, right_eye_landmarks, left_pupil_landmarks, right_pupil_landmarks, mouth_landmarks, hand_landmarks
+
+    
     
 
 if __name__ == "__main__":
@@ -142,7 +189,7 @@ if __name__ == "__main__":
             if not ret:
                 break
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            data = extractor.process_frame(frame_rgb, frame_id)
+            data , left_eye_landmarks, right_eye_landmarks, left_pupil_landmarks, right_pupil_landmarks, mouth_landmarks, hand_landmarks = extractor.process_frame(frame_rgb, frame_id)
             frame_id += 1
             if frame_id >= 150:
                 data["video_file_name"] = vid_file_name
