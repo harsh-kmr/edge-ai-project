@@ -118,7 +118,7 @@ class eye_features:
         self.right_eye_indices = [362, 263, 385, 387, 380, 373]
         self.left_pupil_indices = [469, 470, 471, 472]
         self.right_pupil_indices = [474, 475, 476, 477]
-        self.mouth_indices = [67, 73, 11, 303, 61, 403, 16, 180]
+        self.mouth_indices = [61, 73, 11, 303, 308, 403, 16, 180]
 
     @staticmethod
     def euclidean_distance_2d(point1, point2):

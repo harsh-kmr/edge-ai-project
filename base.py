@@ -4,14 +4,11 @@ import numpy as np
 import pandas as pd
 from collections import deque
 import os
-from torchvision import transforms
-import torch
-import torch.nn as nn
 from PIL import Image
 import csv
 import time
 
-from phone_predict import PhoneDetectorModel, phone_detector
+#from phone_predict import PhoneDetectorModel, phone_detector
 from eye import eye_features
 from hand_1 import hand_features
 from head_pose import head_features
@@ -30,6 +27,8 @@ class MasterFeatureExtractor():
         self.face_mesh_object = face_mesh_object
         self.pose_object = pose_object
         self.phone_window_size = phone_window_size
+        self.width = frame_width
+        self.height = frame_height
         self.eye_features = eye_features( 
             frame_width=frame_width,
             frame_height=frame_height,
@@ -58,7 +57,7 @@ class MasterFeatureExtractor():
             default_wheel_box=default_wheel_box,
             window_size=window_size
         )
-        self.phone_features = phone_detector(model_path, phone_window_size=phone_window_size)
+        #self.phone_features = phone_detector(model_path, phone_window_size=phone_window_size)
         self.df = None
 
     def process_frame(self, frame, frame_id):
@@ -70,25 +69,29 @@ class MasterFeatureExtractor():
         eye_data = self.eye_features.calculate_eye_features(face_results,  frame_id)
         head_data = self.head_features.calculate_head_features(face_results, frame, frame_id)
         hand_data = self.hand_features.calculate_hand_features(pose_results, face_results)
-        phone_data = self.phone_features.calculate_phone_feature(frame, frame_id)
+        #phone_data = self.phone_features.calculate_phone_feature(frame, frame_id)
         
 
         # Combine all features into a single dictionary
         combined_data = {
-            "frame_id": frame_id,
+            #"frame_id": frame_id,
             **eye_data,
             **head_data,
             **hand_data,
-            **phone_data
+            #**phone_data
         }
-        left_eye_landmarks, right_eye_landmarks, left_pupil_landmarks, right_pupil_landmarks = self.eye_features.get_eye_landmarks(face_results,  self.width, self.height)
-        mouth_landmarks = self.eye_features.get_mouth_landmarks(face_results,  self.width, self.height)
+        left_eye_landmarks, right_eye_landmarks, left_pupil_landmarks, right_pupil_landmarks , mouth_landmarks= self.eye_features.get_landmarks(face_results)
         hand_landmarks = self.hand_features.extract_hand_position(pose_results)
-        return combined_data, left_eye_landmarks, right_eye_landmarks, left_pupil_landmarks, right_pupil_landmarks, mouth_landmarks, hand_landmarks
+        if hasattr(face_results, 'multi_face_landmarks') and face_results.multi_face_landmarks:
+            face_landmarks_ = face_results.multi_face_landmarks[0]
+            head_landmarks = self.head_features.get_landmarks(face_landmarks_)
+        else:
+            head_landmarks = None
+        return combined_data, left_eye_landmarks, right_eye_landmarks, left_pupil_landmarks, right_pupil_landmarks, mouth_landmarks, hand_landmarks, head_landmarks
 
     
-def get_feature_for_model(self, frame, frame_id):
-        combined_data, left_eye_landmarks, right_eye_landmarks, left_pupil_landmarks, right_pupil_landmarks, mouth_landmarks, hand_landmarks = self.process_frame(frame, frame_id)
+    def get_feature_for_model(self, frame, frame_id):
+        combined_data, left_eye_landmarks, right_eye_landmarks, left_pupil_landmarks, right_pupil_landmarks, mouth_landmarks, hand_landmarks, head_landmarks = self.process_frame(frame, frame_id)
         # Ordered list of keys
         expected_keys = [
             "left_eye_aspect_ratio",
@@ -151,7 +154,7 @@ def get_feature_for_model(self, frame, frame_id):
 
         
         
-        return feature_list, left_eye_landmarks, right_eye_landmarks, left_pupil_landmarks, right_pupil_landmarks, mouth_landmarks, hand_landmarks
+        return feature_list, left_eye_landmarks, right_eye_landmarks, left_pupil_landmarks, right_pupil_landmarks, mouth_landmarks, hand_landmarks, head_landmarks
 
     
     
@@ -189,7 +192,7 @@ if __name__ == "__main__":
             if not ret:
                 break
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            data , left_eye_landmarks, right_eye_landmarks, left_pupil_landmarks, right_pupil_landmarks, mouth_landmarks, hand_landmarks = extractor.process_frame(frame_rgb, frame_id)
+            data , left_eye_landmarks, right_eye_landmarks, left_pupil_landmarks, right_pupil_landmarks, mouth_landmarks, hand_landmarks, head_landmarks = extractor.process_frame(frame_rgb, frame_id)
             frame_id += 1
             if frame_id >= 150:
                 data["video_file_name"] = vid_file_name
