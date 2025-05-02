@@ -388,18 +388,12 @@ def extract_frames_from_videos(
 def train_model(pwd,phone_dir="phone", no_phone_dir="no_phone", batch_size=32, num_epochs=20, 
                 patience=5, checkpoint_path="phone_detector_model.pt"):
     """Train the phone detection model"""
-    # Define transformations
-    transform = transforms.Compose([
-        transforms.Resize((224, 224)),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-    ])
 
     phone_dir = os.path.join(pwd, phone_dir)
     no_phone_dir = os.path.join(pwd, no_phone_dir)
 
     # Create dataset
-    dataset = PhoneDataset(phone_dir, no_phone_dir, transform=transform)
+    dataset = PhoneDataset(phone_dir, no_phone_dir)
     print(f"Dataset created with {len(dataset)} images")
 
     # Split into train and validation sets

@@ -37,9 +37,24 @@ class Preprocessing:
     
     def _load_video_(self, video_file):
         video_path = os.path.join(self.video_dir, video_file)
+        
         if self.debug_flag:
             print(f"DEBUG: Loading video from {video_path}")
         cap = cv2.VideoCapture(video_path)
+        frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        if self.debug_flag:
+            print(f"DEBUG: Video dimensions: {frame_width}x{frame_height}")
+        
+        if frame_width < frame_height:
+            if self.debug_flag:
+                print(f"DEBUG: Width ({frame_width}) > Height ({frame_height}), rotating video")
+            # Creating a rotation matrix
+            # We'll rotate frames individually during processing
+            self.rotate_video = True
+        else:
+            self.rotate_video = False
+
         if not cap.isOpened():
             raise ValueError(f"Could not open video file: {video_path}")
         if self.debug_flag:
@@ -48,8 +63,21 @@ class Preprocessing:
     
     def _resize_frame_(self, frame):
         if self.debug_flag and frame is not None:
+            print(f"DEBUG: Processing frame with shape {frame.shape[:2]}")
+        
+        # Check if rotation is needed (width > height)
+        if hasattr(self, 'rotate_video') and self.rotate_video:
+            if self.debug_flag:
+                print(f"DEBUG: Rotating frame")
+            # Rotate 90 degrees counterclockwise
+            frame = cv2.rotate(frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
+            
+        if self.debug_flag and frame is not None:
             print(f"DEBUG: Resizing frame from {frame.shape[:2]} to {self.image_size}")
+        
+        # Resize the frame
         frame = cv2.resize(frame, self.image_size)
+        frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
         return frame
     
     def _convert_color_(self, frame):
@@ -279,7 +307,7 @@ if __name__ == "__main__":
     video_output_dir = "/home/harsh/Downloads/sem2/edgeai/edge ai project/output_videos"
     
     processor = Preprocessing(
-        image_size=(224, 224),
+        image_size=(256, 256),
         color_mode='rgb',
         video_fps=30,
         video_duration=30,

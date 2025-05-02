@@ -2,450 +2,358 @@ import mediapipe as mp
 import cv2
 import numpy as np
 import pandas as pd
+import threading
+import queue
+from collections import deque
+import time
+
+import mediapipe as mp
+import cv2
+import numpy as np
+import pandas as pd
 from collections import deque
 
-class Posepoints():
-    def __init__(self, face_mesh_object, hands_object, df=None, frame_width=640, frame_height=480, max_side_glance=60, mar_threshold = 0.5, perclos_threshold=0.18):
-        self.face_mesh_object = face_mesh_object
-        self.hands_object = hands_object
-        self.df = df if df is not None else pd.DataFrame()
+class RunningStat:
+    def __init__(self, window_size):
+        self.n = window_size
+        self.count = 0
+        self.mean = 0.0
+        self.var = 0.0   # stores E[x²] – (E[x])²
+        self._buffer = deque(maxlen=window_size)
+        
+    def update(self, new_value):
+        """Push a new value; if buffer is full, pop the oldest."""
+        if self.count < self.n:
+            # filling phase
+            old = 0.0
+            self.count += 1
+        else:
+            old = self._buffer[0]  # oldest about to be removed
+            
+        # push new, pop old
+        if len(self._buffer) == self.n:
+            self._buffer.popleft()
+        self._buffer.append(new_value)
+        
+        # incremental mean
+        self.mean += (new_value - old) / self.n
+        # incremental E[x^2]
+        self.var += (new_value*new_value - old*old) / self.n
+        
+    @property
+    def variance(self):
+        """Returns Var = E[x²] – (E[x])²"""
+        return max(self.var - self.mean*self.mean, 0.0)
+        
+    @property
+    def is_full(self):
+        return self.count >= self.n
+
+
+class BlinkDetector:
+    """Specialized class for blink detection"""
+    def __init__(self, window_size=150):
+        self.window_size = window_size
+        self.blink_window = deque(maxlen=window_size)
+        
+    def update(self, left_eye_closed, right_eye_closed):
+        self.blink_window.append((left_eye_closed, right_eye_closed))
+        
+    def count_blinks(self):
+        if len(self.blink_window) < 3:
+            return 0
+            
+        window_data = list(self.blink_window)
+        both_eyes_closed = [(left & right) for left, right in window_data]
+        
+        blinks = 0
+        for i in range(1, len(both_eyes_closed) - 1):
+            if both_eyes_closed[i-1] != both_eyes_closed[i] and both_eyes_closed[i+1] == both_eyes_closed[i-1]:
+                blinks += 1
+                
+        return blinks
+
+class PerclosCalculator:
+    """Specialized class for PERCLOS calculation"""
+    def __init__(self, window_size=150, threshold=0.2):
+        self.window_size = window_size
+        self.threshold = threshold
+        self.perclos_window = deque(maxlen=window_size)
+        
+    def update(self, left_ear, right_ear, no_visible_eyes):
+        self.perclos_window.append((left_ear, right_ear, no_visible_eyes))
+        
+    def calculate(self):
+        if not self.perclos_window:
+            return 0.0
+            
+        valid_frames = [(left, right) for left, right, no_visible in self.perclos_window if not no_visible]
+        if not valid_frames:
+            return 0.0
+            
+        avg_ears = [(left + right) / 2 for left, right in valid_frames]
+        closed_frames = [ear for ear in avg_ears if ear < self.threshold]
+        
+        return len(closed_frames) / len(valid_frames)
+
+class eye_features:
+    def __init__(self, frame_width, frame_height, mar_threshold=0.2, perclos_threshold=0.2):
+        self.mar_threshold = mar_threshold
+        self.perclos_threshold = perclos_threshold
         self.frame_width = frame_width
         self.frame_height = frame_height
-        self.max_side_glance = max_side_glance
-        self.mar_threshold= mar_threshold
-        self.ear_window_size = 30 # 1 sec @ 30fps
-        self.perclos_window = 60
-        self.perclos_threshold = perclos_threshold
         
-    
-    def process_frame(self, frame, frame_id):
-        face_results = self.face_mesh_object.process(frame)
-        hand_results = self.hands_object.process(frame)
-        self.frame_id = frame_id
-        self.save_to_df(face_results, hand_results)
-        return face_results, hand_results
-    
-    @staticmethod
-    def get_mouth_landmarks(face_results, frame_width=640, frame_height=480):
-        mouth_landmarks =[]
-        if face_results.multi_face_landmarks:
-            for face_landmakrs in face_results.multi_face_landmarks:
-                mouth_landmarks = [
-                    face_landmakrs.landmark[67], # Right Corner of LiP
-                    face_landmakrs.landmark[73], # Right top of LiP
-                    face_landmakrs.landmark[11], # Top of LIP
-                    face_landmakrs.landmark[303], # Left top of LiP
-                    face_landmakrs.landmark[61], # Left Corner  of Lip
-                    face_landmakrs.landmark[403], # Left Botttom of LiP
-                    face_landmakrs.landmark[16], # Botttom of LiP
-                    face_landmakrs.landmark[180], # Right Botttom of LiP
-                ]
-                mouth_landmarks = [(lm.x * frame_width, lm.y*frame_height, lm.z) for lm in mouth_landmarks]
-                return mouth_landmarks
+        # Use RunningStat for efficient statistical calculations
+        self.ear_stat = RunningStat(30)
+        self.mar_stat = RunningStat(40)  # Added MAR statistics tracker
+        self.left_pupil_stat = RunningStat(30)
+        self.right_pupil_stat = RunningStat(30)
+        
+        # Specialized detectors
+        self.blink_detector = BlinkDetector(20)
+        self.perclos_calculator = PerclosCalculator(30, perclos_threshold)
+        
+        # Pre-calculate landmark indices for faster lookup
+        self.left_eye_indices = [33, 133, 160, 158, 144, 153]
+        self.right_eye_indices = [362, 263, 385, 387, 380, 373]
+        self.left_pupil_indices = [469, 470, 471, 472]
+        self.right_pupil_indices = [474, 475, 476, 477]
+        self.mouth_indices = [67, 73, 11, 303, 61, 403, 16, 180]
 
-    @staticmethod
-    def get_eye_landmarks(face_results, frame_width=640, frame_height=480):
-        left_eye_landmarks = []
-        right_eye_landmarks = []
-        left_pupil_landmarks = []
-        right_pupil_landmarks = []
-
-        if face_results.multi_face_landmarks:
-            for face_landmarks in face_results.multi_face_landmarks:
-                left_eye_landmarks = [
-                    face_landmarks.landmark[33], #left most point # p1
-                    face_landmarks.landmark[133], # right most point # p4
-                    face_landmarks.landmark[160], # top left point # p2
-                    face_landmarks.landmark[158], # top right point # p3
-                    face_landmarks.landmark[144], # bottom left point # p6
-                    face_landmarks.landmark[153], # bottom right point # p5
-                ]
-
-                right_eye_landmarks = [
-                    face_landmarks.landmark[362], # left most point
-                    face_landmarks.landmark[263], # right most point
-                    face_landmarks.landmark[385], # top left point
-                    face_landmarks.landmark[387], # top right point
-                    face_landmarks.landmark[380], # bottom left point
-                    face_landmarks.landmark[373], # bottom right point
-                ]
-
-                left_pupil_landmarks = [
-                    face_landmarks.landmark[469], # right most point
-                    face_landmarks.landmark[470], # top point
-                    face_landmarks.landmark[471], # left most point
-                    face_landmarks.landmark[472], # bottom point
-                ]
-
-                right_pupil_landmarks = [
-                    face_landmarks.landmark[474], # right most point
-                    face_landmarks.landmark[475], # top point
-                    face_landmarks.landmark[476], # left most point
-                    face_landmarks.landmark[477], # bottom point
-                ]
-                # Convert landmarks to list
-                left_eye_landmarks = [(landmark.x * frame_width, landmark.y * frame_height, landmark.z) for landmark in left_eye_landmarks]
-                right_eye_landmarks = [(landmark.x * frame_width, landmark.y * frame_height, landmark.z) for landmark in right_eye_landmarks]
-                left_pupil_landmarks = [(landmark.x * frame_width, landmark.y * frame_height, landmark.z) for landmark in left_pupil_landmarks]
-                right_pupil_landmarks = [(landmark.x * frame_width, landmark.y * frame_height, landmark.z) for landmark in right_pupil_landmarks]
-
-        return left_eye_landmarks, right_eye_landmarks, left_pupil_landmarks, right_pupil_landmarks
-    
-    def get_features(self, face_results, hand_results):
-        feature_points = {
-            "left_eye": [],
-            "right_eye": [],
-            "left_pupil": [],
-            "right_pupil": [],
-            "mouth" : [],
-            "frame_id": self.frame_id,
-        }
-
-        feature_points["left_eye"], feature_points["right_eye"], feature_points["left_pupil"], feature_points["right_pupil"] = self.get_eye_landmarks(face_results, self.frame_width, self.frame_height)
-        feature_points["mouth"] = self.get_mouth_landmarks(face_results, self.frame_width, self.frame_height)
-            
-        return feature_points
-    
-    @staticmethod
-    def no_visible_eyes(face_results):
-        if not face_results.multi_face_landmarks:
-            return True
-        for face_landmarks in face_results.multi_face_landmarks:
-            left_eye_visible = face_landmarks.landmark[33].visibility > 0.5
-            right_eye_visible = face_landmarks.landmark[362].visibility > 0.5
-            if left_eye_visible and right_eye_visible:
-                return False
-        return True
-    
     @staticmethod
     def euclidean_distance_2d(point1, point2):
-        """Calculates the Euclidean distance between two 2D points."""
-        #print(point1, point2)
-        x1, y1, z1 = point1
-        x2, y2, z2 = point2
+        """Optimized Euclidean distance calculation."""
+        x1, y1, _ = point1
+        x2, y2, _ = point2
         return np.sqrt((x2 - x1)**2 + (y2 - y1)**2)
 
     @staticmethod
     def euclidean_distance_3d(point1, point2):
-        """Calculates the Euclidean distance between two 3D points."""
+        """Optimized Euclidean distance calculation."""
         x1, y1, z1 = point1
         x2, y2, z2 = point2
         return np.sqrt((x2 - x1)**2 + (y2 - y1)**2 + (z2 - z1)**2)
-    
-    @staticmethod
-    def MouthAspectRatio(mouth):
-        if mouth is None or len(mouth) < 8:
-            return 0.0
-        p1 = mouth[0]
-        p2 = mouth[1]
-        p3 = mouth[2]
-        p4 = mouth[3]
-        p5 = mouth[4]
-        p6 = mouth[5]
-        p7 = mouth[6]
-        p8 = mouth[7]
+
+    def get_landmarks(self, face_results):
+        """Get all landmarks in one pass for efficiency."""
+        if not face_results.multi_face_landmarks:
+            return None, None, None, None, None
+            
+        face_landmarks = face_results.multi_face_landmarks[0]
         
+        # Extract landmarks more efficiently
+        left_eye = [(face_landmarks.landmark[idx].x * self.frame_width,
+                     face_landmarks.landmark[idx].y * self.frame_height,
+                     face_landmarks.landmark[idx].z)
+                    for idx in self.left_eye_indices]
+                    
+        right_eye = [(face_landmarks.landmark[idx].x * self.frame_width,
+                      face_landmarks.landmark[idx].y * self.frame_height,
+                      face_landmarks.landmark[idx].z)
+                     for idx in self.right_eye_indices]
+                     
+        left_pupil = [(face_landmarks.landmark[idx].x * self.frame_width,
+                       face_landmarks.landmark[idx].y * self.frame_height,
+                       face_landmarks.landmark[idx].z)
+                      for idx in self.left_pupil_indices]
+                      
+        right_pupil = [(face_landmarks.landmark[idx].x * self.frame_width,
+                        face_landmarks.landmark[idx].y * self.frame_height,
+                        face_landmarks.landmark[idx].z)
+                       for idx in self.right_pupil_indices]
+                       
+        mouth = [(face_landmarks.landmark[idx].x * self.frame_width,
+                 face_landmarks.landmark[idx].y * self.frame_height,
+                 face_landmarks.landmark[idx].z)
+                for idx in self.mouth_indices]
+                
+        return left_eye, right_eye, left_pupil, right_pupil, mouth
 
-        horizontal_dist = Posepoints.euclidean_distance_2d(p1, p6)
-
-        if horizontal_dist < 1e-5:
-            return 0.0
+    def no_visible_eyes(self, face_results):
+        """Check if eyes are visible."""
+        if not face_results.multi_face_landmarks:
+            return True
         
-        mar = (Posepoints.euclidean_distance_2d(p2,p8) + Posepoints.euclidean_distance_2d(p3, p7) + Posepoints.euclidean_distance_2d(p4,p6))/(2*Posepoints.euclidean_distance_2d(p1,p5))
-        return mar
-    
-    def calculate_perclos(self):
-        """Calculate perclos
-        Calculate EAR per frame. Given an EAR threshold for "eye closure" i.e. self.perclos_threshold. Maintain a rolling window of frames given in self .perclos_window. Calculate the percentage of frames within the window where EAR < threshold. 
-        """
-        if len(self.df)<self.perclos_window:
-            return 0.0
+        face_landmarks = face_results.multi_face_landmarks[0]
+        left_eye_visible = face_landmarks.landmark[33].visibility > 0.5
+        right_eye_visible = face_landmarks.landmark[362].visibility > 0.5
         
-        window = self.df.tail(self.perclos_window)
-        valid_frames = window[~window['no_visible_eyes']]
-        if len(valid_frames) == 0:
-            return 0.0
-        avg_ear = (valid_frames['left_eye_aspect_ratio'] + 
-          valid_frames['right_eye_aspect_ratio']) / 2
-        closed_frames = avg_ear < self.perclos_threshold
-        return closed_frames.mean()
-    
-    @staticmethod
-    def EyeAspectRatio2D(eye):
-        #print(eye)
-        # Formula : dist(p2,p6) + dist(p3,p5) / 2*dist(p1, p4)
-        if eye is None or len(eye) < 6:
-            return 0
-        p1 = (eye[0][0], eye[0][1], eye[0][2])
-        p2 = (eye[2][0], eye[2][1], eye[2][2])
-        p3 = (eye[3][0], eye[3][1], eye[3][2])
-        p4 = (eye[1][0], eye[1][1], eye[1][2])
-        p5 = (eye[5][0], eye[5][1], eye[5][2])
-        p6 = (eye[4][0], eye[4][1], eye[4][2])
+        return not (left_eye_visible and right_eye_visible)
 
-        dist_p2_p6 = Posepoints.euclidean_distance_2d(p2, p6)
-        dist_p3_p5 = Posepoints.euclidean_distance_2d(p3, p5)
-        dist_p1_p4 = Posepoints.euclidean_distance_2d(p1, p4)
-
-        if dist_p1_p4 == 0:
-            return 0  # Avoid division by zero
-
-        return (dist_p2_p6 + dist_p3_p5) / (2.0 * dist_p1_p4)
-    
-    @staticmethod
-    def EyeAspectRatio3D(eye):
-        # Formula : dist(p2,p6) + dist(p3,p5) / 2*dist(p1, p4)
-        if eye is None or len(eye) < 6:
-            return 0
-        p1 = (eye[0][0], eye[0][1], eye[0][2])
-        p2 = (eye[2][0], eye[2][1], eye[2][2])
-        p3 = (eye[3][0], eye[3][1], eye[3][2])
-        p4 = (eye[1][0], eye[1][1], eye[1][2])
-        p5 = (eye[5][0], eye[5][1], eye[5][2])
-        p6 = (eye[4][0], eye[4][1], eye[4][2])
-
-        dist_p2_p6 = Posepoints.euclidean_distance_3d(p2, p6)
-        dist_p3_p5 = Posepoints.euclidean_distance_3d(p3, p5)
-        dist_p1_p4 = Posepoints.euclidean_distance_3d(p1, p4)
-
-        if dist_p1_p4 == 0:
-            return 0  # Avoid division by zero
-
-        return (dist_p2_p6 + dist_p3_p5) / (2.0 * dist_p1_p4)
-    
-    @staticmethod
-    def center_pupil(pupil):
-        """Calculates the center of the pupil given its landmarks."""
-        if not pupil or len(pupil) < 4:
-            return 0
-        
-        x_coords = [p[0] for p in pupil]
-        y_coords = [p[1] for p in pupil]
-        
-        center_x = sum(x_coords) / len(x_coords)
-        center_y = sum(y_coords) / len(y_coords)
-        
-        return (center_x, center_y)
-    
-    @staticmethod
-    def center_eye(eye):
-        """Calculates the center of the eye given its landmarks."""
+    def EyeAspectRatio2D(self, eye):
+        """Calculate Eye Aspect Ratio (2D)."""
         if not eye or len(eye) < 6:
             return 0
-        
-        x_coords = [p[0] for p in eye]
-        y_coords = [p[1] for p in eye]
-        
-        center_x = sum(x_coords) / len(x_coords)
-        center_y = sum(y_coords) / len(y_coords)
-        
-        return (center_x, center_y)
-    
-    @staticmethod
-    def eye_pupling_distance(eye, pupil):
-        """Calculates the distance between the eye and pupil centers."""
-        if eye is None or pupil is None:
-            return 0
-        if len(eye) < 6 or len(pupil) < 4:
-            return 0
-        
-        eye_center = Posepoints.center_eye(eye)
-        pupil_center = Posepoints.center_pupil(pupil)
+            
+        # Direct index access for speed
+        p1, p4 = eye[0], eye[1]
+        p2, p3 = eye[2], eye[3]
+        p6, p5 = eye[4], eye[5]
 
-        # add a zero in the z axis
-        eye_center = (eye_center[0], eye_center[1], 0)
-        pupil_center = (pupil_center[0], pupil_center[1], 0)
-        
-        if eye_center is None or pupil_center is None:
-            return None
-        
-        return Posepoints.euclidean_distance_2d(eye_center, pupil_center)
-    
-    def count_blinks_in_window(self, num_frames=30):
-        if self.df.empty or len(self.df) < 3:  # Need at least 3 frames to detect a complete blink
+        dist_p2_p6 = self.euclidean_distance_2d(p2, p6)
+        dist_p3_p5 = self.euclidean_distance_2d(p3, p5)
+        dist_p1_p4 = self.euclidean_distance_2d(p1, p4)
+
+        if dist_p1_p4 < 1e-5:
             return 0
             
-        available_frames = min(len(self.df), num_frames)
-        window_data = self.df.tail(available_frames).copy()
-        
-        if len(window_data) < 3:
-            return 0
-        
-        window_data['both_eyes_closed'] = (window_data['left_eye_closed'] & 
-                                        window_data['right_eye_closed']).astype(int)
-        
-        window_data['state_change'] = window_data['both_eyes_closed'].diff().fillna(0)
-        
-       
-        blink_count = len(window_data[window_data['state_change'] == -1])
-        
-        return blink_count
-    
-    def variance_pupil_movement(self, eye_pupil_distance, side="left", num_frames=10):
-        """Calculates the variance of pupil movement over a specified number of frames."""
-        if self.df.empty:
-            return 0, 0
-        if side not in ["left", "right"]:
-            raise ValueError("Side must be either 'left' or 'right'")
-        if len(self.df) < num_frames:
-            return 0, 0
-        last_rows = self.df.tail(num_frames)
-        if side == "left":
-            last_rows = last_rows[last_rows["left_eye_pupil_distance"].notna()]
-            pupil_distance = last_rows["left_eye_pupil_distance"].values
-        else:
-            last_rows = last_rows[last_rows["right_eye_pupil_distance"].notna()]
-            pupil_distance = last_rows["right_eye_pupil_distance"].values
-        if len(pupil_distance) < 2:
-            return 0
-        mean_distance = np.mean(pupil_distance)
-        variance = np.var(pupil_distance)
-        return mean_distance, variance
+        return (dist_p2_p6 + dist_p3_p5) / (2.0 * dist_p1_p4)
 
-    def calculate_ear_variance(self):
-        """Calculate mean and variance of eye aspect ratio"""
-        if len(self.df) < self.ear_window_size:
-            return 0.0, 0.0
-        
-        # We get a more human meaningful measure-reduce noise
-        avg_ears = (
-            self.df['left_eye_aspect_ratio'].tail(self.ear_window_size) + 
-            self.df['right_eye_aspect_ratio'].tail(self.ear_window_size)
-        ) / 2
-        
-        return np.mean(avg_ears), np.var(avg_ears.values)
+    def EyeAspectRatio3D(self, eye):
+        """Calculate Eye Aspect Ratio (3D)."""
+        if not eye or len(eye) < 6:
+            return 0
+            
+        # Direct index access for speed
+        p1, p4 = eye[0], eye[1]
+        p2, p3 = eye[2], eye[3]
+        p6, p5 = eye[4], eye[5]
 
-    @staticmethod
-    def is_eye_closed(eye, threshold=0.2):
-        """Checks if the eye is closed based on the aspect ratio."""
-        aspect_ratio = Posepoints.EyeAspectRatio2D(eye)
+        dist_p2_p6 = self.euclidean_distance_3d(p2, p6)
+        dist_p3_p5 = self.euclidean_distance_3d(p3, p5)
+        dist_p1_p4 = self.euclidean_distance_3d(p1, p4)
+
+        if dist_p1_p4 < 1e-5:
+            return 0
+            
+        return (dist_p2_p6 + dist_p3_p5) / (2.0 * dist_p1_p4)
+
+    def center_point(self, points):
+        """Calculate center point efficiently."""
+        if not points:
+            return None
+            
+        x_sum = y_sum = 0
+        for p in points:
+            x_sum += p[0]
+            y_sum += p[1]
+            
+        return (x_sum / len(points), y_sum / len(points))
+
+    def eye_pupil_distance(self, eye, pupil):
+        """Calculate distance between eye and pupil centers."""
+        if not eye or not pupil:
+            return None
+            
+        eye_center = self.center_point(eye)
+        pupil_center = self.center_point(pupil)
+        
+        if not eye_center or not pupil_center:
+            return None
+            
+        # Use 2D distance for efficiency
+        return np.sqrt((eye_center[0] - pupil_center[0])**2 + 
+                       (eye_center[1] - pupil_center[1])**2)
+
+    def MouthAspectRatio(self, mouth):
+        """Calculate Mouth Aspect Ratio."""
+        if not mouth or len(mouth) < 8:
+            return 0.0
+            
+        # Direct index access for speed
+        p1, p5 = mouth[0], mouth[4]
+        p2, p8 = mouth[1], mouth[7]
+        p3, p7 = mouth[2], mouth[6]
+        p4, p6 = mouth[3], mouth[5]
+
+        horizontal_dist = self.euclidean_distance_2d(p1, p5)
+        if horizontal_dist < 1e-5:
+            return 0.0
+            
+        mar = (self.euclidean_distance_2d(p2, p8) + 
+               self.euclidean_distance_2d(p3, p7) +
+               self.euclidean_distance_2d(p4, p6)) / (2 * horizontal_dist)
+               
+        return mar
+
+    def is_eye_closed(self, eye, threshold=0.2):
+        """Check if eye is closed based on aspect ratio."""
+        aspect_ratio = self.EyeAspectRatio2D(eye)
         return aspect_ratio < threshold
-    
-    def calculate_eye_features(self, face_results, hand_results):
-        feature_points = self.get_features(face_results, hand_results)
-        frame_id = self.frame_id
-        left_eye = feature_points["left_eye"]
-        right_eye = feature_points["right_eye"]
-        left_pupil = feature_points["left_pupil"]
-        right_pupil = feature_points["right_pupil"]
-        mouth = feature_points['mouth']
 
-        # Eye based metric
-        no_visible_eyes = self.no_visible_eyes(face_results)
-        left_eye_aspect_ratio = self.EyeAspectRatio2D(left_eye)
-        right_eye_aspect_ratio = self.EyeAspectRatio2D(right_eye)
-        left_eye_aspect_ratio_3d = self.EyeAspectRatio3D(left_eye)
-        right_eye_aspect_ratio_3d = self.EyeAspectRatio3D(right_eye)
-        left_eye_pupil_distance = self.eye_pupling_distance(left_eye, left_pupil)
-        right_eye_pupil_distance = self.eye_pupling_distance(right_eye, right_pupil)
+    def calculate_eye_features(self, face_results, frame_id):
+        """Calculate all eye features with optimized statistics."""
+        # Get all landmarks in one efficient pass
+        left_eye, right_eye, left_pupil, right_pupil, mouth = self.get_landmarks(face_results)
         
-
-        left_eye_pupil_movement, left_eye_pupil_variance = self.variance_pupil_movement(left_eye_pupil_distance, side="left")
-        right_eye_pupil_movement, right_eye_pupil_variance = self.variance_pupil_movement(right_eye_pupil_distance, side="right")
+        # Initialize with default values
+        feature_data = {
+            "frame_id": frame_id,
+            "left_eye_aspect_ratio": 0,
+            "right_eye_aspect_ratio": 0,
+            "left_eye_aspect_ratio_3d": 0,
+            "right_eye_aspect_ratio_3d": 0,
+            "left_eye_pupil_distance": 0,
+            "right_eye_pupil_distance": 0,
+            "no_visible_eyes": True,
+            "left_eye_closed": True,
+            "right_eye_closed": True,
+            "mouth_aspect_ratio": 0,
+            "mouth_aspect_ratio_mean": 0,
+            "mouth_aspect_ratio_variance": 0,
+            "eye_closure_during_yawn": False,
+            "left_eye_pupil_movement": 0,
+            "left_eye_pupil_variance": 0,
+            "right_eye_pupil_movement": 0,
+            "right_eye_pupil_variance": 0,
+            "num_blinks": 0,
+            "ear_mean": 0,
+            "ear_variance": 0,
+            "perclos": 0,
+        }
+        
+        # Return early if no face detected
+        if left_eye is None:
+            return feature_data
+            
+        # Calculate basic metrics
+        no_visible_eyes = self.no_visible_eyes(face_results)
+        left_ear = self.EyeAspectRatio2D(left_eye)
+        right_ear = self.EyeAspectRatio2D(right_eye)
+        left_ear_3d = self.EyeAspectRatio3D(left_eye)
+        right_ear_3d = self.EyeAspectRatio3D(right_eye)
+        left_pupil_dist = self.eye_pupil_distance(left_eye, left_pupil)
+        right_pupil_dist = self.eye_pupil_distance(right_eye, right_pupil)
         left_eye_closed = self.is_eye_closed(left_eye)
         right_eye_closed = self.is_eye_closed(right_eye)
-        num_blinks = self.count_blinks_in_window(num_frames=30)
-        ear_variance = self.calculate_ear_variance()
-
-        perclos = self.calculate_perclos()
-        # Mouth based metrics
         mouth_aspect_ratio = self.MouthAspectRatio(mouth)
-        # Mouth and eye based metric
+        
+        # Update running statistics efficiently
+        self.ear_stat.update((left_ear + right_ear) / 2)
+        self.mar_stat.update(mouth_aspect_ratio)  # Update MAR statistics
+        self.left_pupil_stat.update(left_pupil_dist)
+        self.right_pupil_stat.update(right_pupil_dist)
+        
+        # Update specialized trackers
+        self.blink_detector.update(left_eye_closed, right_eye_closed)
+        self.perclos_calculator.update(left_ear, right_ear, no_visible_eyes)
+        
+        # Calculate complex metrics
         eye_closure_during_yawn = (mouth_aspect_ratio > self.mar_threshold) and (left_eye_closed and right_eye_closed)
         
-        
-        data = {
-            "frame_id": frame_id,
-            "left_eye_aspect_ratio": left_eye_aspect_ratio,
-            "right_eye_aspect_ratio": right_eye_aspect_ratio,
-            "left_eye_aspect_ratio_3d": left_eye_aspect_ratio_3d,
-            "right_eye_aspect_ratio_3d": right_eye_aspect_ratio_3d,
-            "left_eye_pupil_distance": left_eye_pupil_distance,
-            "right_eye_pupil_distance": right_eye_pupil_distance,
+        # Populate feature data
+        feature_data.update({
+            "left_eye_aspect_ratio": left_ear,
+            "right_eye_aspect_ratio": right_ear,
+            "left_eye_aspect_ratio_3d": left_ear_3d,
+            "right_eye_aspect_ratio_3d": right_ear_3d,
+            "left_eye_pupil_distance": left_pupil_dist,
+            "right_eye_pupil_distance": right_pupil_dist,
             "no_visible_eyes": no_visible_eyes,
-            "left_eye_pupil_movement": left_eye_pupil_movement,
-            "left_eye_pupil_variance": left_eye_pupil_variance,
-            "right_eye_pupil_movement": right_eye_pupil_movement,
-            "right_eye_pupil_variance": right_eye_pupil_variance,
             "left_eye_closed": left_eye_closed,
             "right_eye_closed": right_eye_closed,
-            "num_blinks": num_blinks,
             "mouth_aspect_ratio": mouth_aspect_ratio,
+            "mouth_aspect_ratio_mean": self.mar_stat.mean,
+            "mouth_aspect_ratio_variance": self.mar_stat.variance,
             "eye_closure_during_yawn": eye_closure_during_yawn,
-            'ear_variance': ear_variance,
-            "perclos": perclos,
-        }
-
-        return data
-
-
-
-
-    
-    def save_to_df(self, face_results, hand_results):
-
-        eye_data = self.calculate_eye_features(face_results, hand_results)
-        data = eye_data
-        # it will merge all the incoming data from eye, hand, face, etc
-        frame_id = data["frame_id"]     
-
+            "left_eye_pupil_movement": self.left_pupil_stat.mean,
+            "left_eye_pupil_variance": self.left_pupil_stat.variance,
+            "right_eye_pupil_movement": self.right_pupil_stat.mean,
+            "right_eye_pupil_variance": self.right_pupil_stat.variance,
+            "num_blinks": self.blink_detector.count_blinks(),
+            "ear_mean": self.ear_stat.mean,
+            "ear_variance": self.ear_stat.variance,
+            "perclos": self.perclos_calculator.calculate(),
+        })
         
-
-        self.df = pd.concat([self.df, pd.DataFrame([data])], ignore_index=True)
-        print(f"Frame {frame_id} data added to internal DataFrame.")
-    
-    def save_to_csv(self, csv_path):
-        self.csv_path = csv_path
-        self.df.to_csv(csv_path, index=False)
-        print(f"Data saved to {csv_path}.")
-
-
-if __name__ == "__main__":
-    # Example usage
-    mp_face_mesh = mp.solutions.face_mesh
-    face_mesh = mp_face_mesh.FaceMesh(max_num_faces=1, refine_landmarks=True, 
-                                  min_detection_confidence=0.5, min_tracking_confidence=0.5)
-    hands = mp.solutions.hands.Hands()
-    
-    cap = cv2.VideoCapture("/home/harsh/Downloads/sem2/edgeai/edge ai project/video5.mp4")
-
-    frame_id = 0
-    frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    fps_input = int(cap.get(cv2.CAP_PROP_FPS))
-
-    fourcc = cv2.VideoWriter_fourcc(*'XVID')
-    out = cv2.VideoWriter('eye_function.avi', fourcc, fps_input, (frame_width, frame_height))
-
-    extractor = Posepoints(face_mesh, hands, frame_width=frame_width, frame_height=frame_height)
-
-    while cap.isOpened():
-        ret, frame = cap.read()
-        if not ret:
-            break
-            
-        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        
-        frame_id += 1
-        face_results, hand_results = extractor.process_frame(frame_rgb, frame_id)
-        
-        out.write(frame)
-        
-        # Optional: Show the frame
-        # cv2.imshow('MediaPipe Face Mesh', frame)
-        # if cv2.waitKey(5) & 0xFF == 27:
-        #     break
-            
-    extractor.save_to_csv("eye_data.csv")
-    cap.release()
-    out.release()
-    cv2.destroyAllWindows()
-    print("Processing complete.")
-
-        
-
-
-
-
-
-
+        return feature_data

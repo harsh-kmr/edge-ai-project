@@ -5,3 +5,5 @@
 *.mov
 dummy data/
 __pycache__/
+*.csv
+*.pt
