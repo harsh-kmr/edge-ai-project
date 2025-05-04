@@ -98,9 +98,7 @@ class Preprocessing:
         if current_fps == self.video_fps:
             if self.debug_flag:
                 print("DEBUG: FPS already matches target, no change needed")
-            return cap, None  # No change needed
-            
-        # If FPS needs to be changed, we need to read all frames and create a new video
+            return cap, None  
         if self.debug_flag:
             print("DEBUG: FPS change required, reading all frames...")
             

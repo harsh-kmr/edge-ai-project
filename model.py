@@ -1,3 +1,5 @@
+import numpy as np
+
 def score(input):
     if input[44] <= 229.28030395507812:
         if input[42] <= -0.29737013578414917:
@@ -6489,4 +6491,6 @@ def score(input):
                                                     var0 = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0]
                                 else:
                                     var0 = [0.0, 1.0, 0.0, 0.0, 0.0, 0.0]
-    return var0
+    labels = ['blink', 'distracted', 'normal', 'phone', 'sleep', 'yawn']
+    idx = np.argmax(var0)
+    return var0, labels[idx]

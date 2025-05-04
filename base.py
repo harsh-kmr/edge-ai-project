@@ -61,7 +61,6 @@ class MasterFeatureExtractor():
         self.df = None
 
     def process_frame(self, frame, frame_id):
-        # Process the frame with face mesh, hands, and pose models
         face_results = self.face_mesh_object.process(frame)
         pose_results = self.pose_object.process(frame)
 
@@ -70,9 +69,7 @@ class MasterFeatureExtractor():
         head_data = self.head_features.calculate_head_features(face_results, frame, frame_id)
         hand_data = self.hand_features.calculate_hand_features(pose_results, face_results)
         #phone_data = self.phone_features.calculate_phone_feature(frame, frame_id)
-        
 
-        # Combine all features into a single dictionary
         combined_data = {
             #"frame_id": frame_id,
             **eye_data,

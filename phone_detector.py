@@ -240,12 +240,12 @@ class PhoneDataset(Dataset):
         self.all_images = [(img, 1) for img in self.phone_images] + [(img, 0) for img in self.no_phone_images]
         random.shuffle(self.all_images)
         self.transform = transform or transforms.Compose([
-            transforms.Resize((256, 256)),  # Resize larger than final size for cropping
-            transforms.RandomCrop(224),     # Random crop for position variety
-            transforms.RandomHorizontalFlip(p=0.5),  # Horizontal flips
-            transforms.RandomRotation(15),  # Slight rotations
-            transforms.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.1, hue=0.05),  # Color variations
-            transforms.RandomAutocontrast(p=0.2),  # Random autocontrast
+            transforms.Resize((256, 256)), 
+            transforms.RandomCrop(224),    
+            transforms.RandomHorizontalFlip(p=0.5),  
+            transforms.RandomRotation(15),  
+            transforms.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.1, hue=0.05),  
+            transforms.RandomAutocontrast(p=0.2),  
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         ])
@@ -262,7 +262,6 @@ class PhoneDataset(Dataset):
             return image, torch.tensor(label, dtype=torch.float)
         except Exception as e:
             print(f"Error loading image {img_path}: {e}")
-            # Return a placeholder or skip the sample
             return torch.zeros((3, 224, 224)), torch.tensor(label, dtype=torch.float)
 
 
@@ -332,28 +331,22 @@ def extract_frames_from_videos(
 ):
     """Extract a random subset of frames (with probability=frame_fraction) from each video,
     saving phone vs. no-phone frames into balanced directories."""
-    # Build absolute paths
     phone_dir = os.path.join(pwd, phone_dir)
     no_phone_dir = os.path.join(pwd, no_phone_dir)
     csv_path  = os.path.join(pwd, csv_path)
 
-    # Make sure output dirs exist
     os.makedirs(phone_dir, exist_ok=True)
     os.makedirs(no_phone_dir, exist_ok=True)
 
-    # Read CSV
     df = pd.read_csv(csv_path)
 
-    # All phone videos
     phone_videos = df[df['label'] == 'phone'].reset_index(drop=True)
-    # Randomly pick same number of non-phone videos
     non_phone_videos = (
         df[df['label'] != 'phone']
         .sample(n=len(phone_videos), random_state=seed)
         .reset_index(drop=True)
     )
 
-    # Set up RNG
     random.seed(seed)
 
     def _save_sampled_frames(videos_df, out_dir, prefix):
@@ -370,7 +363,6 @@ def extract_frames_from_videos(
                     ret, frame = cap.read()
                     if not ret:
                         break
-                    # sample this frame?
                     if random.random() < frame_fraction:
                         fname = f"{prefix}_{vid_idx}_frame{frame_count}.jpg"
                         cv2.imwrite(os.path.join(out_dir, fname), frame)
@@ -379,7 +371,6 @@ def extract_frames_from_videos(
             except Exception as e:
                 print(f"Error processing {row['video_address']}: {e}")
 
-    # Extract & save
     _save_sampled_frames(phone_videos,     phone_dir,     "phone")
     _save_sampled_frames(non_phone_videos, no_phone_dir, "no_phone")
 
@@ -392,25 +383,20 @@ def train_model(pwd,phone_dir="phone", no_phone_dir="no_phone", batch_size=32, n
     phone_dir = os.path.join(pwd, phone_dir)
     no_phone_dir = os.path.join(pwd, no_phone_dir)
 
-    # Create dataset
     dataset = PhoneDataset(phone_dir, no_phone_dir)
     print(f"Dataset created with {len(dataset)} images")
 
-    # Split into train and validation sets
     train_size = int(0.8 * len(dataset))
     val_size = len(dataset) - train_size
     train_dataset, val_dataset = torch.utils.data.random_split(dataset, [train_size, val_size])
 
-    # Create data loaders
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=4)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=4)
 
-    # Create model, optimizer, and loss function
     model = PhoneDetectorModel()
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
     loss_fn = nn.BCEWithLogitsLoss()
 
-    # Train the model
     trainer = CNN_trainer(
         model=model,
         train_loader=train_loader,
@@ -425,7 +411,6 @@ def train_model(pwd,phone_dir="phone", no_phone_dir="no_phone", batch_size=32, n
 
     trained_model, train_losses, val_losses, train_metrics, val_metrics = trainer.fit()
 
-    # Save the trained model
     final_path = checkpoint_path.replace(".pt", "_final.pt")
     torch.save(trained_model.state_dict(), final_path)
     print(f"Model saved to {final_path}")
@@ -434,12 +419,7 @@ def train_model(pwd,phone_dir="phone", no_phone_dir="no_phone", batch_size=32, n
 
 
 if __name__ == "__main__":
-    # Set paths
     pwd = "/home/harsh/Downloads/sem2/edgeai/edge ai project/dummy data/cleaned data"
-    csv_path = "video_labels.csv"  # Change this to your CSV path
-    
-    # Extract frames from videos
+    csv_path = "video_labels.csv"  
     extract_frames_from_videos(pwd= pwd, csv_path=csv_path)
-    
-    # Train model
     model, train_metrics, val_metrics = train_model(pwd=pwd)

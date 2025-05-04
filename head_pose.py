@@ -32,7 +32,6 @@ class head_features():
         self.frame_height = frame_height
         self.frame_id = 0
         
-        # Baseline angles for normal driving position
         self.baseline_yaw = baseline_yaw
         self.baseline_pitch = baseline_pitch
         self.baseline_roll = baseline_roll
@@ -73,13 +72,12 @@ class head_features():
         self.event_window = event_window
         self.head_away_events_window = deque(maxlen=event_window)
         
-        # Additional metrics
         self.distraction_confidence = 0.0
         self.distraction_pattern_detected = False
 
     def get_landmarks(self, face_landmarks):
         """Extract facial landmarks for head pose estimation."""
-        idxs = [1, 199, 130, 359, 61, 291]  # Key facial points
+        idxs = [1, 199, 130, 359, 61, 291]  
         points = []
         for idx in idxs:
             lm = face_landmarks.landmark[idx]
@@ -148,20 +146,17 @@ class head_features():
         if yaw is None or pitch is None or roll is None:
             return True, 1.0
         
-        # Calculate deviation from baseline normal driving position
+
         yaw_deviation = abs(yaw - self.baseline_yaw)
         pitch_deviation = abs(pitch - self.baseline_pitch)
         roll_deviation = abs(roll - self.baseline_roll)
         
-        # Calculate distraction confidence score (0.0-1.0)
         yaw_factor = min(1.0, yaw_deviation / (self.yaw_threshold * 2))
         pitch_factor = min(1.0, pitch_deviation / (self.pitch_threshold * 2))
         roll_factor = min(1.0, roll_deviation / (self.roll_threshold * 2))
         
-        # Combined confidence score (weighted average)
         confidence = 0.5 * yaw_factor + 0.3 * pitch_factor + 0.2 * roll_factor
         
-        # Determine if head is away based on thresholds
         is_away = (yaw_deviation > self.yaw_threshold or 
                   pitch_deviation > self.pitch_threshold or 
                   roll_deviation > self.roll_threshold)
@@ -178,7 +173,6 @@ class head_features():
         if is_away:
             self.current_away_duration += 1
         else:
-            # Record event if duration threshold met
             if self.current_away_duration >= self.min_away_duration:
                 self.head_away_event_count += 1
                 self.head_away_events_window.append(frame_id)
@@ -190,7 +184,6 @@ class head_features():
     
     def count_head_away_events(self, frame_id):
         """Count distraction events within the time window."""
-        # Count events within the time window relative to the current frame
         return sum(1 for event_frame in self.head_away_events_window 
                   if frame_id - event_frame <= self.event_window)
 
@@ -201,14 +194,12 @@ class head_features():
         yaw, pitch, roll = None, None, None
         nose_point = (self.frame_width // 2, self.frame_height // 2)
 
-        # Extract face landmarks if available
         if hasattr(face_results, 'multi_face_landmarks') and face_results.multi_face_landmarks:
             face_landmarks = face_results.multi_face_landmarks[0]
             nose = face_landmarks.landmark[1]  # Nose tip landmark
             nose_point = (int(nose.x * self.frame_width), int(nose.y * self.frame_height))
             yaw, pitch, roll = self.estimate_head_pose(face_landmarks)
 
-        # Update distraction metrics
         head_away_duration = self.update_head_away_status(frame_id, yaw, pitch, roll)
         yaw_var, pitch_var, roll_var = self.calculate_variances()
         head_away_count = self.count_head_away_events(frame_id)
@@ -221,7 +212,7 @@ class head_features():
         #       f"baseline pitch: {self.baseline_pitch}, ",
         #       f"baseline roll: {self.baseline_roll}, ",)
 
-        # Return comprehensive feature dictionary
+
         return {
             "yaw": yaw,
             "pitch": pitch,
@@ -232,7 +223,6 @@ class head_features():
             "head_away_duration": head_away_duration,
             "head_away_event_count": head_away_count,
             "distraction_confidence": self.distraction_confidence,
-            # Add baseline deviations if angles are available
             "yaw_deviation": abs(yaw - self.baseline_yaw) if yaw is not None else None,
             "pitch_deviation": abs(pitch - self.baseline_pitch) if pitch is not None else None,
             "roll_deviation": abs(roll - self.baseline_roll) if roll is not None else None
@@ -247,7 +237,7 @@ def process_video_head(video_path,
     frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     
-    # Initialize head_features with all parameters
+
     head_feature = head_features(
         frame_width=frame_width, 
         frame_height=frame_height,

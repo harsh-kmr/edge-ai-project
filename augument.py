@@ -22,7 +22,6 @@ class Augment(Preprocessing):
             
         height, width = frame.shape[:2]
         
-        # Create transformation matrix
         center = (width // 2, height // 2)
         
         # 1. Random rotation

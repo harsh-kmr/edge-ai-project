@@ -4,7 +4,7 @@ import os
 import time
 import traceback
 from dataclasses import dataclass
-from base2 import MasterFeatureExtractor
+from base import MasterFeatureExtractor
 import mediapipe as mp
 from model import score
 
@@ -26,11 +26,9 @@ class LiveInferencePipeline:
         if self.video_source is None:
             raise ValueError("A video source must be specified")
 
-        # After resize+rotate dims
         w, h = self.image_size
         self.processed_width, self.processed_height = h, w
 
-        # Text settings
         self.font = cv2.FONT_HERSHEY_SIMPLEX
         self.font_scale = 0.8
         self.font_color = (0, 255, 0)
@@ -63,6 +61,7 @@ class LiveInferencePipeline:
         if self.debug_flag:
             print(f"DEBUG: Preprocess shape={frame.shape}")
         pf = cv2.resize(frame, self.image_size)
+        pf = frame
         print(f"DEBUG: Preprocessed shape={pf.shape}")
             
         if self.color_mode == 'rgb':
@@ -77,17 +76,18 @@ class LiveInferencePipeline:
             print("DEBUG: Running inference")
         try:
             print("DEBUG: Running infederence")
-            feature, left_eye_landmarks, right_eye_landmarks, left_pupil_landmarks, right_pupil_landmarks, mouth_landmarks, hand_landmarks = self.feature_extractor.get_feature_for_model(pf, 0)
+            feature, left_eye_landmarks, right_eye_landmarks, left_pupil_landmarks, right_pupil_landmarks, mouth_landmarks, hand_landmarks, head_features = self.feature_extractor.get_feature_for_model(pf, 0)
             var0, label = score(feature)
-            return label, left_eye_landmarks, right_eye_landmarks, left_pupil_landmarks, right_pupil_landmarks, mouth_landmarks, hand_landmarks
+            return label, left_eye_landmarks, right_eye_landmarks, left_pupil_landmarks, right_pupil_landmarks, mouth_landmarks, hand_landmarks, head_features
         except Exception as e:
             feature = self.feature_extractor.get_feature_for_model(pf, 0)
             if self.debug_flag:
                 print(f"DEBUG: Inference error: {e}\n{traceback.format_exc()}")
                 print(feature)
+                print("DEBUG: Feature length:", len(feature))
             return "Error"
 
-    def _annotate_frame(self, frame, label, left_eye_landmarks, right_eye_landmarks, left_pupil_landmarks, right_pupil_landmarks, mouth_landmarks, hand_landmarks):
+    def _annotate_frame(self, frame, label, left_eye_landmarks, right_eye_landmarks, left_pupil_landmarks, right_pupil_landmarks, mouth_landmarks, hand_landmarks, head_features):
         af = frame.copy()
         text = f"{label}"
         cv2.putText(af, text, (10, 30), self.font, self.font_scale,
@@ -107,8 +107,8 @@ class LiveInferencePipeline:
         draw_landmarks(left_pupil_landmarks, color=(0, 0, 255))
         draw_landmarks(right_pupil_landmarks, color=(255, 255, 0))
         draw_landmarks(mouth_landmarks, color=(255, 0, 255))
+        draw_landmarks(head_features, color=(0, 255, 255))
 
-        # Draw hand landmarks if available
         if isinstance(hand_landmarks, dict):
             hand_points = [(hand_landmarks[k], hand_landmarks[k.replace("_x", "_y")], hand_landmarks.get(k.replace("_x", "_z"), 0))
                         for k in hand_landmarks if "_x" in k]
@@ -128,12 +128,10 @@ class LiveInferencePipeline:
                 print("DEBUG: Main loop start")
 
             while True:
-                # Read frame
                 ret, frame = cap.read()
                 if not ret:
                     break
                 
-                # Process the frame (no parallelization)
                 processed = self._preprocess_frame(frame)
 
                 if self.color_mode == 'rgb':
@@ -143,17 +141,16 @@ class LiveInferencePipeline:
                 else:
                     write_frame = processed
 
-                # inference & annotation
                 if self.run_infer:
-                    label , left_eye_landmarks, right_eye_landmarks, left_pupil_landmarks, right_pupil_landmarks, mouth_landmarks, hand_landmarks= self._run_inference(processed)
+                    label , left_eye_landmarks, right_eye_landmarks, left_pupil_landmarks, right_pupil_landmarks, mouth_landmarks, hand_landmarks, head_features = self._run_inference(processed)
                     #print(left_eye_landmarks, right_eye_landmarks, left_pupil_landmarks, right_pupil_landmarks, mouth_landmarks, hand_landmarks)
-                    disp = self._annotate_frame(write_frame, label,  left_eye_landmarks, right_eye_landmarks, left_pupil_landmarks, right_pupil_landmarks, mouth_landmarks, hand_landmarks)
+                    disp = self._annotate_frame(write_frame, label,  left_eye_landmarks, right_eye_landmarks, left_pupil_landmarks, right_pupil_landmarks, mouth_landmarks, hand_landmarks, head_features)
                 else:
                     disp = write_frame
 
                 # save
                 if self.save_video and out:
-                    out.write(write_frame)
+                    out.write(disp)
 
                 # display
                 if self.display_output:
@@ -184,7 +181,6 @@ class LiveInferencePipeline:
 
 if __name__ == "__main__":
     videos = os.listdir('./')
-    # Create a dataframe with video file name and labe;
     for video in videos:
         if video.endswith('.mp4'):
             mp_face_mesh = mp.solutions.face_mesh
@@ -198,10 +194,10 @@ if __name__ == "__main__":
                 image_size=(960, 540),
                 color_mode='rgb',
                 #video_source='http://10.72.240.138:4747/video',
-                video_source= '/home/pranavt/edge ai project/video_20250428_153522.mp4',
+                video_source= '/home/harsh/Downloads/sem2/edgeai/edge ai project/dummy data/cleaned data/phone_22.mp4',
                 output_path='inference_preprocessed.mp4',
                 save_video=True,
-                display_output=True,
+                display_output=False,
                 fps_display=True,
                 debug_flag=True,
                 run_infer=True,

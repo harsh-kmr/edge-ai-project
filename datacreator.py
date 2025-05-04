@@ -26,7 +26,6 @@ processor = Preprocessing(
 processor()
 
 videos = os.listdir(video_output_dir)
-# Create a dataframe with video file name and label
 data = []
 for video in videos:
     if video.endswith('.mp4'):

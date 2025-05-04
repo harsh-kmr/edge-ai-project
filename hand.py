@@ -13,45 +13,37 @@ class hand_features():
         self.frame_width = frame_width
         self.frame_height = frame_height
         self.proximity_threshold = proximity_threshold
-        self.default_wheel_box = default_wheel_box  # [x_min, x_max, y_min, y_max] normalized
-        self.alpha = alpha  # Steering wheel width scaling factor
-        self.beta = beta    # Vertical position factor
-        
-        # Using deques for time-based features
+        self.default_wheel_box = default_wheel_box 
+        self.alpha = alpha  
+        self.beta = beta    
+
         self.left_hand_near_face_history = deque(maxlen=window_size)
         self.right_hand_near_face_history = deque(maxlen=window_size)
         self.left_hand_off_wheel_history = deque(maxlen=window_size)
         self.right_hand_off_wheel_history = deque(maxlen=window_size)
         
-        # Current calculated wheel box
         self.current_wheel_box = default_wheel_box
     
     def calculate_wheel_box(self, pose_landmarks):
         """Calculate dynamic steering wheel box based on body pose landmarks"""
-        # Start with default box
+
         wheel_box = self.default_wheel_box.copy()
-        
-        # Only calculate if we have valid pose landmarks
         if pose_landmarks and pose_landmarks.pose_landmarks:
             landmarks = pose_landmarks.pose_landmarks.landmark
             
-            # Check if we have the required shoulder and hip points
             if (landmarks[11].visibility > 0.5 and landmarks[12].visibility > 0.5 and 
                 landmarks[23].visibility > 0.5 and landmarks[24].visibility > 0.5):
                 
-                # Extract coordinates
                 x11, y11 = landmarks[11].x, landmarks[11].y  # Left shoulder
                 x12, y12 = landmarks[12].x, landmarks[12].y  # Right shoulder
                 x23, y23 = landmarks[23].x, landmarks[23].y  # Left hip
                 x24, y24 = landmarks[24].x, landmarks[24].y  # Right hip
                 
-                # Compute wheel box parameters using alpha and beta
                 W = self.alpha * abs(x12 - x11)
                 H = W * 0.6
                 Cx = 0.5 * (x11 + x12)
                 Cy = 0.5 * (y11 + y12) + self.beta * ((0.5 * (y23 + y24)) - 0.5 * (y11 + y12))
                 
-                # Calculate box in normalized coordinates
                 xmin = max(0.0, Cx - W/2)
                 xmax = min(1.0, Cx + W/2)
                 ymin = max(0.0, Cy - 3*H/4)
@@ -59,12 +51,10 @@ class hand_features():
                 
                 wheel_box = [xmin, xmax, ymin, ymax]
         
-        # Store current wheel box and return it
         self.current_wheel_box = wheel_box
         return wheel_box
     
     def extract_hand_position(self, pose_landmarks):
-        # Initialize with default values
         hand_pos = {
             "left_wrist_x": 0, "left_wrist_y": 0, "left_wrist_z": 0,
             "left_palm_x": 0, "left_palm_y": 0, "left_palm_z": 0,
@@ -77,13 +67,11 @@ class hand_features():
         
         landmarks = pose_landmarks.pose_landmarks.landmark
         
-        # Left hand: landmarks 15 (wrist), 17 and 19 (palm)
-        if landmarks[15].visibility > 0.5:  # Check if left wrist is visible
+        if landmarks[15].visibility > 0.5: 
             hand_pos["left_wrist_x"] = landmarks[15].x * self.frame_width
             hand_pos["left_wrist_y"] = landmarks[15].y * self.frame_height
             hand_pos["left_wrist_z"] = landmarks[15].z
             
-            # Calculate palm center as average of landmarks 17 and 19
             if landmarks[17].visibility > 0.5 and landmarks[19].visibility > 0.5:
                 palm_x = (landmarks[17].x + landmarks[19].x) / 2
                 palm_y = (landmarks[17].y + landmarks[19].y) / 2
@@ -93,13 +81,11 @@ class hand_features():
                 hand_pos["left_palm_y"] = palm_y * self.frame_height
                 hand_pos["left_palm_z"] = palm_z
         
-        # Right hand: landmarks 16 (wrist), 18 and 20 (palm)
-        if landmarks[16].visibility > 0.5:  # Check if right wrist is visible
+        if landmarks[16].visibility > 0.5:  
             hand_pos["right_wrist_x"] = landmarks[16].x * self.frame_width
             hand_pos["right_wrist_y"] = landmarks[16].y * self.frame_height
             hand_pos["right_wrist_z"] = landmarks[16].z
             
-            # Calculate palm center as average of landmarks 18 and 20
             if landmarks[18].visibility > 0.5 and landmarks[20].visibility > 0.5:
                 palm_x = (landmarks[18].x + landmarks[20].x) / 2
                 palm_y = (landmarks[18].y + landmarks[20].y) / 2
@@ -117,8 +103,7 @@ class hand_features():
         if not pose_landmarks.pose_landmarks or not face_landmarks.multi_face_landmarks:
             return depths
         
-        # Calculate eye center correctly
-        eye_center = [0, 0, 0]  # Default initialization
+        eye_center = [0, 0, 0] 
         if face_landmarks.multi_face_landmarks:
             left_eye = face_landmarks.multi_face_landmarks[0].landmark[468]
             right_eye = face_landmarks.multi_face_landmarks[0].landmark[473]
@@ -130,7 +115,6 @@ class hand_features():
         
         landmarks = pose_landmarks.pose_landmarks.landmark
         
-        # Calculate depth for left hand (wrist)
         if landmarks[15].visibility > 0.5:  # Left wrist
             left_wrist_3d = [
                 landmarks[15].x * self.frame_width,
@@ -139,7 +123,6 @@ class hand_features():
             ]
             depths["left_hand_eye_depth"] = np.sqrt(sum((a - b) ** 2 for a, b in zip(left_wrist_3d, eye_center)))
         
-        # Calculate depth for right hand (wrist)
         if landmarks[16].visibility > 0.5:  # Right wrist
             right_wrist_3d = [
                 landmarks[16].x * self.frame_width,
@@ -152,18 +135,15 @@ class hand_features():
 
     def calculate_angle_3d(self, point1, point2, point3):
         """Calculate the angle between three 3D points, with point2 as the vertex"""
-        # Create vectors
+
         vector1 = [point1[0] - point2[0], point1[1] - point2[1], point1[2] - point2[2]]
         vector2 = [point3[0] - point2[0], point3[1] - point2[1], point3[2] - point2[2]]
         
-        # Calculate dot product
         dot_product = sum(a * b for a, b in zip(vector1, vector2))
         
-        # Calculate magnitudes
         mag1 = np.sqrt(sum(a ** 2 for a in vector1))
         mag2 = np.sqrt(sum(a ** 2 for a in vector2))
         
-        # Calculate angle
         if mag1 * mag2 == 0:
             return 0.0
         
@@ -180,7 +160,6 @@ class hand_features():
         
         landmarks = pose_landmarks.pose_landmarks.landmark
         
-        # Extract 3D points for right arm (shoulder 12, elbow 14, wrist 16)
         if landmarks[12].visibility > 0.5 and landmarks[14].visibility > 0.5 and landmarks[16].visibility > 0.5:
             right_shoulder = [
                 landmarks[12].x * self.frame_width,
@@ -199,7 +178,6 @@ class hand_features():
             ]
             angles["right_elbow_angle"] = self.calculate_angle_3d(right_shoulder, right_elbow, right_wrist)
         
-        # Extract 3D points for left arm (shoulder 11, elbow 13, wrist 15)
         if landmarks[11].visibility > 0.5 and landmarks[13].visibility > 0.5 and landmarks[15].visibility > 0.5:
             left_shoulder = [
                 landmarks[11].x * self.frame_width,
@@ -221,10 +199,8 @@ class hand_features():
         return angles
 
     def check_hand_off_steering_wheel(self, pose_landmarks):
-        # Calculate the current wheel box
         current_wheel_box = self.calculate_wheel_box(pose_landmarks)
         
-        # Default return with current window statistics
         result = {
             "left_hand_off_wheel": False,
             "left_hand_off_wheel_duration": sum(self.left_hand_off_wheel_history),
@@ -232,7 +208,6 @@ class hand_features():
             "right_hand_off_wheel_duration": sum(self.right_hand_off_wheel_history)
         }
         
-        # If no pose detected, assume both hands are off wheel
         if not pose_landmarks.pose_landmarks:
             self.left_hand_off_wheel_history.append(1)
             self.right_hand_off_wheel_history.append(1)
@@ -240,7 +215,6 @@ class hand_features():
             result["right_hand_off_wheel"] = True
             return result
         
-        # Convert normalized wheel box to pixel coordinates
         wheel_box_pixels = [
             current_wheel_box[0] * self.frame_width,  # x_min
             current_wheel_box[1] * self.frame_width,  # x_max
@@ -250,11 +224,9 @@ class hand_features():
         
         landmarks = pose_landmarks.pose_landmarks.landmark
         
-        # Check left wrist (landmark 15)
         if landmarks[15].visibility > 0.5:
             x, y = landmarks[15].x * self.frame_width, landmarks[15].y * self.frame_height
             
-            # Check if hand is within the steering wheel area
             in_wheel = (wheel_box_pixels[0] <= x <= wheel_box_pixels[1] and 
                         wheel_box_pixels[2] <= y <= wheel_box_pixels[3])
             
@@ -264,15 +236,12 @@ class hand_features():
             else:
                 self.left_hand_off_wheel_history.append(0)
         else:
-            # Left hand not detected
             self.left_hand_off_wheel_history.append(1)
             result["left_hand_off_wheel"] = True
             
-        # Check right wrist (landmark 16)
         if landmarks[16].visibility > 0.5:
             x, y = landmarks[16].x * self.frame_width, landmarks[16].y * self.frame_height
             
-            # Check if hand is within the steering wheel area
             in_wheel = (wheel_box_pixels[0] <= x <= wheel_box_pixels[1] and 
                         wheel_box_pixels[2] <= y <= wheel_box_pixels[3])
             
@@ -282,66 +251,50 @@ class hand_features():
             else:
                 self.right_hand_off_wheel_history.append(0)
         else:
-            # Right hand not detected
             self.right_hand_off_wheel_history.append(1)
             result["right_hand_off_wheel"] = True
             
-        # Update duration values with the latest sums
         result["left_hand_off_wheel_duration"] = sum(self.left_hand_off_wheel_history)
         result["right_hand_off_wheel_duration"] = sum(self.right_hand_off_wheel_history)
         
         return result
     
     def check_hand_proximity_to_face(self, pose_landmarks, face_landmarks):
-            # Initialize result dictionary
             result = {
                 "left_hand_distance": 0,
                 "right_hand_distance": 0
             }
             
-            # If no face or pose are detected, return default values
             if not pose_landmarks.pose_landmarks or not face_landmarks.multi_face_landmarks:
-                # No distance can be calculated when face is not detected
                 self.left_hand_near_face_history.append(0)
                 self.right_hand_near_face_history.append(0)
                 return result
             
-            # Get nose position as reference point for face
             nose = face_landmarks.multi_face_landmarks[0].landmark[1]  # Nose tip landmark
             nose_pos = [nose.x * self.frame_width, nose.y * self.frame_height]
             
             landmarks = pose_landmarks.pose_landmarks.landmark
             
-            # Check left wrist (landmark 15)
             if landmarks[15].visibility > 0.5:
                 wrist_pos = [landmarks[15].x * self.frame_width, landmarks[15].y * self.frame_height]
                 
-                # Calculate Euclidean distance between wrist and nose
                 distance = np.sqrt((wrist_pos[0] - nose_pos[0])**2 + (wrist_pos[1] - nose_pos[1])**2)
                 result["left_hand_distance"] = distance
                 
-                # Update history - we're now tracking if hand is detected, not proximity
                 self.left_hand_near_face_history.append(distance)
             else:
-                # Left hand not detected
                 self.left_hand_near_face_history.append(0)
                 
-            # Check right wrist (landmark 16)
             if landmarks[16].visibility > 0.5:
                 wrist_pos = [landmarks[16].x * self.frame_width, landmarks[16].y * self.frame_height]
                 
-                # Calculate Euclidean distance between wrist and nose
                 distance = np.sqrt((wrist_pos[0] - nose_pos[0])**2 + (wrist_pos[1] - nose_pos[1])**2)
                 result["right_hand_distance"] = distance
                 
-                # Update history - we're now tracking if hand is detected, not proximity
                 self.right_hand_near_face_history.append(distance)
             else:
-                # Right hand not detected
                 self.right_hand_near_face_history.append(0)
             
-            # Include hand detection durations for compatibility
-            # Calculate variance of hand distances from history
             left_distances = [d for d in self.left_hand_near_face_history if d > 0]
             right_distances = [d for d in self.right_hand_near_face_history if d > 0]
             
@@ -351,17 +304,14 @@ class hand_features():
             return result
 
     def calculate_hand_features(self, pose_results, face_landmarks, frame_id):
-        # Calculate current wheel box 
         current_wheel_box = self.calculate_wheel_box(pose_results)
         
-        # Extract all features
         hand_pos = self.extract_hand_position(pose_results)
         hand_eye_depth = self.compute_hand_eye_depth(pose_results, face_landmarks)
         arm_angles = self.extract_arm_angles(pose_results)
         hand_off_wheel = self.check_hand_off_steering_wheel(pose_results)
         hand_proximity = self.check_hand_proximity_to_face(pose_results, face_landmarks)
         
-        # Include wheel box information in the output
         wheel_box_info = {
             "wheel_box_x_min": current_wheel_box[0],
             "wheel_box_x_max": current_wheel_box[1],
@@ -369,7 +319,6 @@ class hand_features():
             "wheel_box_y_max": current_wheel_box[3]
         }
         
-        # Combine all features into a single dictionary
         data = {
             **hand_pos,
             **hand_eye_depth,
@@ -390,7 +339,6 @@ def process_video_hand(video_path, proximity_threshold=0.2,
     frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     
-    # Initialize hand_features with all parameters
     hand_feature = hand_features(
         frame_width=frame_width, 
         frame_height=frame_height,
@@ -414,14 +362,11 @@ def process_video_hand(video_path, proximity_threshold=0.2,
         if not ret:
             break
         
-        # Process the frame for face and pose landmarks
         face_results = face_mesh.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
         pose_results = pose_mesh.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
         
-        # Calculate hand features
         features = hand_feature.calculate_hand_features(pose_results, face_results, frame_id)
         
-        # Append to DataFrame
         df = pd.concat([df, pd.DataFrame([features])], ignore_index=True)
         
         frame_id += 1
