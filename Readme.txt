@@ -36,3 +36,6 @@ Stage 6: Pose Detection Model (PyTorch)
 - Pranav Tiwari: Developed the PyTorch data loader for the pose model.
 
 GitHub Repository: https://github.com/harsh-kmr/edge-ai/tree/main
+Demo Video: https://indianinstituteofscience-my.sharepoint.com/:f:/g/personal/harshkumar1_iisc_ac_in/Eo_0ujCKjClPmhYjkk5YbucBN1_mPig8EBLInQfk-A8XeA?e=dUtcjh 
+Dataset: Has been Shared with Sir’s Email 
+Model Files: https://github.com/harsh-kmr/edge-ai/blob/main/model.py 
