@@ -140,9 +140,9 @@ Use the provided scripts for data preprocessing and model training:
 
 ## Links
 
-- **GitHub Repository**: [https://github.com/harsh-kmr/edge-ai/tree/main](https://github.com/harsh-kmr/edge-ai/tree/main)
+- **GitHub Repository**: [https://github.com/harsh-kmr/edge-ai-project/tree/main](https://github.com/harsh-kmr/edge-ai/tree/main)
 - **Demo Video**: [https://indianinstituteofscience-my.sharepoint.com/:f:/g/personal/harshkumar1_iisc_ac_in/Eo_0ujCKjClPmhYjkk5YbucBN1_mPig8EBLInQfk-A8XeA?e=dUtcjh](https://indianinstituteofscience-my.sharepoint.com/:f:/g/personal/harshkumar1_iisc_ac_in/Eo_0ujCKjClPmhYjkk5YbucBN1_mPig8EBLInQfk-A8XeA?e=dUtcjh)
-- **Dataset**: Shared via email with project supervisor
+- **Dataset**: Not available for public use
 - **Model Files**: [https://github.com/harsh-kmr/edge-ai/blob/main/model.py](https://github.com/harsh-kmr/edge-ai/blob/main/model.py)
 
 ## License
